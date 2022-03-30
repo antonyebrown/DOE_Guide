@@ -1,11 +1,7 @@
 Design of Experiments Using R skpr Guide
 ================
-Antony Brown
-3/29/2022
-
-## Design of Experiments Using R skpr Guide
-
 By: Antony Brown
+3/29/2022
 
 ## Table of Contents
 
@@ -149,69 +145,10 @@ Install and import the following libraries:
 
 ``` r
 library(skpr)
-```
-
-    ## Warning: package 'skpr' was built under R version 4.1.3
-
-    ## Loading required package: shiny
-
-    ## Warning: package 'shiny' was built under R version 4.1.2
-
-``` r
 library(mbest)
-```
-
-    ## Warning: package 'mbest' was built under R version 4.1.3
-
-    ## Loading required package: nlme
-
-    ## Warning: package 'nlme' was built under R version 4.1.3
-
-``` r
 library(ggplot2)
-```
-
-    ## Warning: package 'ggplot2' was built under R version 4.1.3
-
-``` r
 library(pwr)
-```
-
-    ## Warning: package 'pwr' was built under R version 4.1.3
-
-``` r
 library(tidyverse)
-```
-
-    ## Warning: package 'tidyverse' was built under R version 4.1.3
-
-    ## -- Attaching packages --------------------------------------- tidyverse 1.3.1 --
-
-    ## v tibble  3.1.6     v dplyr   1.0.8
-    ## v tidyr   1.2.0     v stringr 1.4.0
-    ## v readr   2.1.2     v forcats 0.5.1
-    ## v purrr   0.3.4
-
-    ## Warning: package 'tibble' was built under R version 4.1.3
-
-    ## Warning: package 'tidyr' was built under R version 4.1.3
-
-    ## Warning: package 'readr' was built under R version 4.1.3
-
-    ## Warning: package 'purrr' was built under R version 4.1.1
-
-    ## Warning: package 'dplyr' was built under R version 4.1.3
-
-    ## Warning: package 'stringr' was built under R version 4.1.1
-
-    ## Warning: package 'forcats' was built under R version 4.1.1
-
-    ## -- Conflicts ------------------------------------------ tidyverse_conflicts() --
-    ## x dplyr::collapse() masks nlme::collapse()
-    ## x dplyr::filter()   masks stats::filter()
-    ## x dplyr::lag()      masks stats::lag()
-
-``` r
 library(readr)
 ```
 
@@ -1632,7 +1569,7 @@ designpower[[length(designpower)]]
 
 ## Ao Simulation and MTBCF
 
-Please see the companion code in Python for this example.
+Please see the [companion code in Python](https://github.com/antonyebrown/DOE_Guide/blob/main/Design%20of%20Experiments%20Using%20R%20skpr%20Guide%20(Part%202).ipynb) for this example.
 
 ## Power Curve Generation
 
