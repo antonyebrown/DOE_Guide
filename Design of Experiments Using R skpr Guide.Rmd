@@ -1,0 +1,711 @@
+---
+output: github_document
+---
+
+## Design of Experiments Using R skpr Guide
+
+By: Antony Brown
+
+## Table of Contents
+  
+1. Background
+2. skpr Features
+3. Environment Setup
+4. Full Factorial Design (Continuous Response)
+5. D-Optimal Design (Continuous Response)
+6. Full Factorial Design (Binary Response)
+7. D-Optimal Design (Binary Response)
+8. Ao Simulation and MTBCF
+9. Power Curve Generation
+10. References
+
+
+
+
+## Background 
+
+The purpose of this guide is to provide step-by-step instructions on how to generate and evaluate test designs using the [R package "skpr."][1] While guides exist to show how to perform these actions using a combination of JMP and the Excel-based Test Design Suite, this method produces superior results and capabilities all within a single software platform. R and R Studio are also integrated into the AF Datalab VAULT construct, which allows for cloud storage and the use of multi-core computing power.
+
+By using the R skpr package, we can more easily determine the correct number of replications for our test design, as well as the associated conservative power estimates. We also gain the ability to use Monte Carlo simulation methods for designs with non-normal response variables or blocked designs.
+
+### Conservative Power Estimates
+
+As of JMP 15, the default coefficients for q-level categorical factors consists of all active coefficients of magnitude = 1, alternating sign starting with +1. In the case of odd q, the final coefficient is set = 0. These nonzero coefficients all contribute to δ, such that the majority of the time for factors with more than three levels the factor effect power greatly exceeds the most conservative power. **In simple terms, you can end up in a situation where a categorical factor with an odd number of levels > q can have a higher power estimation than a categorical factor with q levels (where q is even), and over-estimating your effect power.** Therefore it is [recommended by IDA to utilize conservative power estimations in test design.][2]
+
+The conservative approach to be used with categorical factors with more than two levels mimics the approach used with two-level factors by assuming that the mean response of one level differs from the another level, while all the other levels do not contribute to changing the response mean. If anticipated responses or anticipated coefficients are reasonably known (past test data of essentially the same system), then the user can modify the defaults. The minimum power is obtained by iteratively searching for and finding the pair of factor levels which yield the lowest power for that factor in the given design.
+
+In skpr, setting conservative = TRUE:
+
+>Specifies whether default method for generating anticipated coefficents should be conservative or not. `TRUE` will give the most conservative estimate of power by setting all but one (or multiple if they are equally low) level in each categorical factor's anticipated coefficients to zero.
+
+[1]: https://www.jstatsoft.org/article/download/v099i01/1435  "Optimal Design Generation and Power Evaluation in R: The skpr Package"
+[2]: https://apps.dtic.mil/sti/pdfs/ADA619843.pdf  "Power Analysis Tutorial for Experimental Design Software"
+[3]: https://www.afit.edu/STAT/passthru.cfm?statfile=21  "Categorical Data in a Designed Experiment Part 2: Sizing with a Binary Response"
+
+
+
+
+
+
+## skpr Features
+
+### Computer Generated Designs   
+  
+1. D-optimal: Minimizes the joint variance of the parameters in the
+statistical model. D-optimal designs are the best for detecting parameter effects and estimating their parameters. For this reason, D-optimality is the most often used optimality in OT.
+
+2. I-optimal: Minimizes the average prediction variance of statistical models. I-optimal designs are best for prediction capability and will spread the test points throughout the design space. I-optimal designs can help “force” a “middle” point into the design.
+
+3. A-optimal: Minimizes the aliasing between the model effects and other alias terms. These designs are more robust to model effects that are active but not included in the original design.
+
+4. G-optimal: Minimizes the maximum variance of the predicted values.
+
+5. E-optimal: Maximizes the minimum eigenvalue of the information matrix.
+
+6. T-optimal: Maximizes the discrepancy between two proposed models at the design locations. 
+
+7. Custom-optimal: User-defined optimality criteria.
+
+### Split-Plot Designs
+
+A common constraint on an experimental design is that one of the factors is hard-to-change, and thus must be varied less often than the other factors (Ju and Lucas 2002). In such a design, this “hard-to-change” factor is kept constant for some number of runs while the “easy- to-change” factors vary from run to run (Yates 1935; Jones and Nachtsheim 2009; Goos and Vandebroek 2001; 2003; 2005). This is called a split-plot design, and a set of runs in which the hard-to-change factor is held constant is called a whole-plot. 
+
+### Monte Carlo Simulation
+
+When designing an experiment with a non-normally distributed response variable, it can be difficult to calculate power analytically. Often, power for these designs is estimated by relying on a normal approximation to the underlying non-normal distribution (Johnson, Freeman, Simpson, and Anderson 2018). The validity of the normal approximation can be hard to quantify, and experiments with small sample sizes are where those approximations are likely to fail, potentially leading to inaccurate power calculations. In these cases, the best way to estimate the power is by simulating the experiment and calculating the power values via a Monte Carlo simulation.
+
+### Plotting
+
+skpr provides two built-in plotting functions:
+
+1. plot_fds: Fraction of design space plot.
+
+2. plot_correlation: Correlation map plot.
+
+
+### GUI
+
+For quick test designs, you can use the built-in GUI if you don't want to work with code. An adaptation using R Shiny can be found [here](https://stricje1.shinyapps.io/doer/).
+
+### Other Features
+
+Please see [the skpr documentation][1] for more information on all of the skpr features listed here, and more.
+
+[1]: https://www.jstatsoft.org/article/download/v099i01/1435  "Optimal Design Generation and Power Evaluation in R: The skpr Package"
+
+
+## Environment Setup
+
+Install and import the following libraries:
+
+
+
+```{r}
+library(skpr)
+library(mbest)
+library(ggplot2)
+library(pwr)
+library(tidyverse)
+library(readr)
+```
+
+
+
+
+Set a random seed for reproducibility:
+
+
+
+```{r}
+set.seed(4)
+```
+
+
+## Example: Full Factorial Design (Continuous Response)
+
+Suppose we want to measure the accuracy of a new GPS receiver. We have the following:
+
+| COI     | Operation | Mission Effect (response variable) |
+| :---------- | :---------- | :---------- |
+|COI 1: Does the GPS system support tactical operations?     | Operation 1: Accurate location information       | Location inaccuracy (meters)       |
+
+With the associated factors and levels table:
+
+| Rx_Type      | Weather | Battery_Life |
+| :---------- | :---------- | :---------- |
+| Handheld      | Clear       | 100     |
+| Airborne   | Cloudy       | 80     |
+|Fixed_Site | Rain       |50  |
+|- | Snow      |-  |
+
+
+
+
+Our first step is to generate all combinations of input factors, using "as.factor" for non-numerical factors:
+
+```{r}
+factorial = expand.grid(Rx_Type = as.factor(c("Handheld", "Airborne", "Fixed_Site")), Weather = as.factor(c("Clear", "Cloudy", "Precipitation", "Snow")), Battery_Life = c(50, 80, 100))
+
+factorial
+```
+
+
+
+Now, we generate our design. We want all main effects plus all two-level interactions. For this example, a full factorial design needs 3x4x3 = 36 runs:
+
+```{r}
+optdesign = gen_design(candidateset = factorial, model = ~ (Rx_Type + Weather + Battery_Life)^2, trials = 36)
+```
+
+Let's evaluate our design using conservative power estimates. In JMP, we would need to manually set the anticipated coefficients for each parameter in order to achieve a conservative power reading. skpr does this automatically for us. We also set our alpha level and anticipated effect size (SNR, or Signal to Noise Ratio) in this function. 
+
+>Effect Size: Default `2`. The signal-to-noise ratio. For continuous factors, this specifies the difference in response between the highest and lowest levels of the factor (which are -1 and +1 after eval_design normalizes the input data), assuming that the root mean square error is 1. If you do not specify anticoef, the anticipated coefficients will be half of effectsize. If you do specify anticoef, effectsize will be ignored.)
+
+If we don't have any prior information to inform our SNR, we can opt to use [the DOT&E standard SNR of 1.5,] [4] with alpha = 0.2. For this example, let's assume that we are looking to for a difference to detect in accuracy of 0.5 meters, and from historical data we believe our standard deviation is 0.7 meters.  Our SNR is 0.5/0.7 = 0.7143, and we then evaluate our design as follows:
+
+[4]: https://www.afit.edu/STAT/passthru.cfm?statfile=109  "Understanding the Signal to Noise Ratio in Design of Experiments"
+
+```{r}
+eval_design(design = optdesign, alpha = 0.2, effectsize = 0.7143, detailedoutput = TRUE, conservative = TRUE)
+```
+
+We see that all of our *effect power values* are below the standard 0.8 that we need for our test. We need to increase the number of replicates in our design, but how many do we need? In JMP, we would have to manually increase the number of replicates until we reached our desired power levels. with skpr, we can do this automatically. Let's say that we believe the "optimal" number of replicates may be between 2 and 11.
+
+Note: You can edit the code below by multiplying your original design by the number of replicates you want. So for our example, we have an original design with 36 trials. Adding 1 replicate of that design would make for a total of 72 trials, and likewise adding 10 replicates would make a total of 396 trials. The "by" portion of the code sets the size of iteration (set this to your original number of trials).
+
+```{r}
+counter <-1
+designpower <-list()
+for(samplesize in seq(72, 396, by = 36)) {
+  optdesign <- gen_design(candidateset = factorial, model = ~ (Rx_Type + Weather + Battery_Life)^2, trials = samplesize)
+  designpower[[counter]] <- eval_design(design = optdesign, alpha = 0.2, effectsize = 0.7143, detailedoutput = TRUE, conservative = TRUE)
+  counter <- counter + 1
+}
+
+designpower[[length(designpower)]]
+```
+
+
+
+The results with the max number of replicates is shown for you, but let's visualize all of our results.
+
+Note: Set your x scale to match the iterations that you performed above.
+
+```{r}
+joined <- do.call(rbind, designpower)
+filtered <- dplyr::filter(joined, type == "effect.power")
+
+ggplot(filtered) + ggtitle("Power vs. Sample Size")+
+
+  theme(text = element_text(size = 16))+
+
+  theme(plot.background = element_rect(color = "black", size = 1))+
+
+  labs(title = "GPS System COI 1 - Op 1")+
+  labs(subtitle = "Power vs. Sample Size")+
+
+  geom_line(aes(x = trials, y = power, color = parameter), size = 1) +
+  
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+
+  scale_x_continuous(breaks = seq(72, 396, 36))
+```
+
+Some of our lines are overlapping, which may be confusing for the viewer. Let's add some spacing with the position_dodge setting to ensure that we can see all of our parameters:
+
+
+```{r}
+joined <- do.call(rbind, designpower)
+filtered <- dplyr::filter(joined, type == "effect.power")
+
+ggplot(filtered) + ggtitle("Power vs. Sample Size")+
+
+  theme(text = element_text(size = 16))+
+
+  theme(plot.background = element_rect(color = "black", size = 1))+
+
+  labs(title = "GPS System COI 1 - Op 1")+
+  labs(subtitle = "Power vs. Sample Size")+
+
+  geom_line(aes(x = trials, y = power, color = parameter), size = 1, position = position_dodge(50)) +
+  
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+
+  scale_x_continuous(breaks = seq(72, 396, 36))
+```
+
+
+From the above output, we can see that we'll need at least 216 samples (or 6 replicates of our original 36 run full factorial design) to reach at least 0.8 power for all of our main effects and effect interactions (some of our effect estimates are not seen because they are on the exact same line as others). Let's evaluate this "ideal" design:
+
+```{r}
+end_design = gen_design(candidateset = factorial, model = ~ (Rx_Type + Weather + Battery_Life)^2, trials = 216)
+eval_design(design = end_design, alpha = 0.2, effectsize = 0.7143, detailedoutput = TRUE, conservative = TRUE)
+```
+
+We'll now produce and download our final test run list:
+
+```{r}
+end_design
+```
+
+
+
+
+## Example: D-Optimal Design (Continuous Response)
+
+Using a similar example from above, we'll now look at how to create and evaluate a D-Optimal design. We have a new GPS Rx type and a new factor of "Altitude." Our factors and levels table is now the following:
+
+
+| Rx_Type      | Weather | Battery_Life | Altitude |  
+| :---------- | :---------- | :---------- | :---------- |
+| Handheld      | Clear       | 100     | High |
+| Airborne   | Cloudy       | 80     | Medium |
+| Fixed_Site | Rain       |- | Low |
+|- | Snow      |- |- |
+
+This time, we have the following disallowed combinations:
+
+- Rx_Type Handheld cannot be tested with High Altitude.
+- Rx_Type Airborne cannot be tested with Snow.
+
+First, we'll generate the Full Factorial design as before:
+
+```{r}
+factorial2 = expand.grid(Rx_Type = as.factor(c("Handheld", "Airborne", "Fixed_Site")), Weather = as.factor(c("Clear", "Cloudy", "Precipitation", "Snow")), Battery_Life = c(80, 100), Altitude = as.factor(c("High", "Medium", "Low")))
+```
+
+Remove disallowed combinations:
+
+```{r}
+factorial2 = subset(factorial2, 
+                    !(Rx_Type %in% c("Handheld") & Altitude %in% c("High")) &
+                    !(Rx_Type %in% c("Airborne") & Weather %in% c("Snow")))
+
+factorial2
+```
+
+This time, when generating our design, we will not include the 2-factor combinations that aren't possible based upon our disallowed combinations set above. So for this example, we will not include Rx_Type:Altitude or Rx_Type:Weather. A good starting point for the number of trials in a D-Optimal design is: $$2 + 2(\text{number of continuous factors}) + 2((\text{number of total categorical factor levels}) -1).$$ 
+
+If this proves to be too few runs to create a design, increase your number of trials until you've reached the minimum. Here, we have: $$2 + 2(0) + 2(12-1) = 24.$$
+
+Generating our design:
+
+```{r}
+d_optdesign = gen_design(candidateset = factorial2, model = ~ Rx_Type + Weather + Battery_Life + Altitude + Rx_Type:Battery_Life + Weather:Battery_Life + Weather:Altitude + Battery_Life:Altitude, trials = 24, optimality = "D", parallel  = TRUE)
+```
+
+
+
+See our design:
+
+
+
+```{r}
+d_optdesign
+```
+
+
+
+Get optimality, design space plot, and correlation plot:
+
+```{r}
+get_optimality(d_optdesign)
+
+```
+
+
+```{r}
+plot_correlations(d_optdesign)
+plot_fds(d_optdesign)
+```
+
+
+
+Recall that the SNR we are using for this test, based upon our desired difference to detect and historical standard deviation is 0.7143. 
+
+Evaluating the design:
+
+
+
+```{r}
+eval_design(design = d_optdesign, alpha = 0.2, effectsize = 0.7143, detailedoutput = TRUE, conservative = TRUE)
+```
+
+Our power estimates are not where we need them to be, and we have significant (|r| > 0.7) correlation. Let's increase the number of replications- we will loop this process again as in the first example to get the number of needed replications, guessing that we will need between 2 and 11 replications.
+
+```{r}
+counter <-1
+designpower <-list()
+for(samplesize in seq(48, 264, by = 24)) {
+  d_optdesign <- gen_design(candidateset = factorial2, model = ~ Rx_Type + Weather + Battery_Life + Altitude + Rx_Type:Battery_Life + Weather:Battery_Life + Weather:Altitude + Battery_Life:Altitude, trials = samplesize)
+  designpower[[counter]] <- eval_design(design = d_optdesign, alpha = 0.2, effectsize = 0.7143, detailedoutput = TRUE, conservative = TRUE)
+  counter <- counter + 1
+}
+
+designpower[[length(designpower)]]
+```
+
+
+Visualizing our results:
+
+
+```{r}
+joined <- do.call(rbind, designpower)
+filtered <- dplyr::filter(joined, type == "effect.power")
+
+ggplot(filtered) + ggtitle("Power vs. Sample Size")+
+
+  theme(text = element_text(size = 16))+
+
+  theme(plot.background = element_rect(color = "black", size = 1))+
+
+  labs(title = "GPS System COI 1 - Op 1")+
+  labs(subtitle = "Power vs. Sample Size")+
+
+  geom_line(aes(x = trials, y = power, color = parameter), size = 1, position = position_dodge(20)) +
+  
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+
+  scale_x_continuous(breaks = seq(48, 264, 24))
+```
+
+
+From the above output, we can see that we'll need at least 192 samples to reach at least 0.8 power for all of our main effects and effect interactions. Let's evaluate this design:
+
+```{r}
+d_optdesign = gen_design(candidateset = factorial2, model = ~ Rx_Type + Weather + Battery_Life + Altitude + Rx_Type:Battery_Life + Weather:Battery_Life + Weather:Altitude + Battery_Life:Altitude, trials = 192, optimality = "D", parallel  = TRUE)
+
+eval_design(design = d_optdesign, alpha = 0.2, effectsize = 0.7143, detailedoutput = TRUE, conservative = TRUE)
+```
+
+
+```{r}
+get_optimality(d_optdesign)
+```
+
+
+```{r}
+plot_correlations(d_optdesign)
+plot_fds(d_optdesign)
+```
+
+
+Our correlations are not significant, and our power estimations for both main effects and two way interactions are all above 80%. Note how in this example, we could reduce the size of our test (from 192 to 120 samples) if we are willing to accept a power estimate for the two-factor interaction "Weather:Altitude" that is below 0.8. This is a decision that you will have to make as an analyst, with help from your test team and system SMEs.
+
+
+
+
+## Example: Full Factorial Design (Binary Response)
+
+### (UNDER CONSTRUCTION)
+
+(Include note about 10000 simulations being the [DOT&E approved standard.][1] Using 1000 here for speed purposes)
+
+Suppose we now want to measure the percentage of mail delivery across various conditions, with the ability to detect a difference of 0.1% in delivery success when going from one factor's level to another. We have the following:
+
+| COI     | Operation | Mission Effect (MORV) |
+| :---------- | :---------- | :---------- |
+|COI 1: Does the mail delivery system support strategic operations?     | Operation 1: Mail delivery      | Delivery success       |
+
+| Measure     | Metric | Threshold | Results | Rating |
+| :---------- | :---------- | :---------- | :---------- | :---------- |
+|MOE 1.1: Mail that is successfully delivered     | Percentage       | ≥ 90%       |  TBD       |  TBD       |
+
+With the associated factors and levels table:
+
+| Mail_Type      | Truck_Type | Weather |
+| :---------- | :---------- | :---------- |
+| Regular     | T1       | Clear     |
+| Priority   | T2       | Rain     |
+| Express   | T3       | Snow |
+
+
+Let's generate our full factorial design. We want all main effects plus all two-level interactions. For this example, a full factorial design needs 3x3x3 = 27 runs:
+
+[1]: https://www.jstatsoft.org/article/download/v099i01/1435  "Optimal Design Generation and Power Evaluation in R: The skpr Package"
+[2]: https://apps.dtic.mil/sti/pdfs/ADA619843.pdf  "Power Analysis Tutorial for Experimental Design Software"
+[3]: https://www.afit.edu/STAT/passthru.cfm?statfile=21  "Categorical Data in a Designed Experiment Part 2: Sizing with a Binary Response"
+
+```{r}
+#Generate the design
+
+factorial3 = expand.grid(Mail_Type = as.factor(c("Regular", "Priority", "Express")), Truck_Type = as.factor(c("T1", "T2","T3")), Weather = as.factor(c("Clear", "Snow", "Rain")))
+
+optdesign3 = gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = 27)
+```
+
+Because we have a non-normally distributed response variable, we will use Monte Carlo simulation.
+
+>When designing an experiment with a non-normally distributed response variable, it can be
+difficult to calculate power analytically. Often, power for these designs is estimated by relying
+on a normal approximation to the underlying non-normal distribution (Johnson, Freeman,
+Simpson, and Anderson 2018). The validity of the normal approximation can be hard to
+quantify, and experiments with small sample sizes are where those approximations are likely
+to fail, potentially leading to inaccurate power calculations. In these cases, the best way to
+estimate the power is by simulating the experiment and calculating the power values via a
+Monte Carlo simulation. [(Morgan-Wall and Khoury, 2021)][1]
+
+Use the [STAT COE sample size calculator] [5] until we code the functions in R. 
+
+Normal method = Difference_to_Detect/SQRT((Threshold_Prob*(1-Threshold_Prob)))
+
+We will use the Normal method to calculate our SNR based upon: P(success) = 0.9, Difference to detect = 0.1, alpha = 0.2, power = 0.8.
+
+SNR = 0.333
+
+
+
+[5]: https://www.afit.edu/STAT/passthru.cfm?statfile=75  "Sample Size Calculator for Designed Experiments That Use Binary Responses"
+
+[1]: https://www.jstatsoft.org/article/download/v099i01/1435  "Optimal Design Generation and Power Evaluation in R: The skpr Package"
+
+```{r}
+eval_design(design = optdesign3, alpha = 0.2, effectsize = 0.333, detailedoutput = TRUE, conservative = TRUE)
+```
+
+
+```{r}
+counter <-1
+designpower <-list()
+for(samplesize in seq(432, 702, by = 27)) {
+  optdesign3 <- gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = samplesize)
+  designpower[[counter]] <- eval_design(design = optdesign3, alpha = 0.2, effectsize = 0.333, detailedoutput = TRUE, conservative = TRUE, parallel = TRUE)
+  counter <- counter + 1
+}
+
+designpower[[length(designpower)]]
+```
+
+
+```{r}
+joined <- do.call(rbind, designpower)
+filtered <- dplyr::filter(joined, type == "effect.power")
+
+ggplot(filtered) + ggtitle("Power vs. Sample Size")+
+
+  geom_line(aes(x = trials, y = power, color = parameter), size = 1) +
+   
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+
+  scale_x_continuous(breaks = seq(432, 702, 27))
+```
+
+
+```{r}
+optdesign4 = gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = 27)
+```
+
+
+```{r}
+eval_design_mc(optdesign4, alpha = 0.2, glmfamily = "binomial", effectsize = c(.80, .90), nsim = 1000, calceffect = TRUE, parallel = TRUE, detailedoutput = TRUE)
+```
+
+
+>eval_design_mc() shows the user a warning: in this design, partial or complete separation
+is detected in fitting the design. This means that the model was not able to be fit in
+at least some of the runs. The user can increase the number of runs to fix the issue, at
+the cost of a more expensive experiment—or use a penalized logistic regression.
+
+(ADD reference to IDA paper)
+
+
+We can see that not only is the estimated power for our effects at 0, our model is also experiencing fitting separation. Our options are to either increase the number of runs, or try a penalized logistic regression. Let's explore the first option, and make a guess that between 15 and 25 replications of our design will give us enough power:
+
+```{r}
+counter <-1
+designpower <-list()
+for(samplesize in seq(432, 702, by = 27)) {
+  optdesign4 <- gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = samplesize)
+  designpower[[counter]] <- eval_design_mc(optdesign4, alpha = 0.2, glmfamily = "binomial", effectsize = c(.80, .90), nsim = 1000, calceffect = TRUE, detailedoutput = TRUE, parallel = TRUE)
+  counter <- counter + 1
+}
+
+designpower[[length(designpower)]]
+```
+
+
+```{r}
+joined <- do.call(rbind, designpower)
+filtered <- dplyr::filter(joined, type == "effect.power.mc")
+
+ggplot(filtered) +
+
+  geom_line(aes(x = trials, y = power, color = parameter), size = 1) +
+  
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+
+  scale_x_continuous(breaks = seq(432, 702, 27))
+```
+
+Note that we already have a good sign- the last 8 of our design iterations did not give a separation warning. Visualizing our results:
+From the above output, we can see that we'll need at least 567 samples (or 21 replicates of our 27 run full factorial design) to reach at least 0.8 power for all of our main effects and effect interactions:
+
+```{r}
+optdesign3 = gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = 594)
+eval_design_mc(optdesign3, alpha = 0.2, glmfamily = "binomial", effectsize = c(.80, .90), nsim = 1000, calceffect = TRUE, parallel = TRUE, detailedoutput = TRUE)
+```
+
+
+
+This is a purely academic example, but consider that 594 is a large amount of runs, representing 22 samples for each of our 27 design points. In reality, we may wish to consider other design options.
+
+
+Now, let's explore the alternative method mentioned earlier and use a penalized logistic regression:
+
+>The user
+postulates that they do not need to add more runs if they instead change the method of
+analysis. Instead of a standard generalized linear model, the user fits a generalized linear
+model with a Firth correction (Firth 1992a; 1992b; 1993; Heinze and Schemper 2002).
+
+(Insert reference link)
+
+Our first step is setting up the Firth function:
+
+```{r}
+fitfirth <- function(formula, X, contrastslist = NULL) {
+  return(glm(formula, data = X, family = "binomial",
+    method = mbest::"firthglm.fit"))
+}
+
+pvalfirth <- function(fit) {
+  return(coef(summary(fit))[, 4])
+}
+
+rfunctionfirth <- function(X, b) {
+  return(rbinom(n = nrow(X), size = 1, prob = 1/(1+exp(-(X %*% b)))))
+}
+```
+
+Now, let's start our process of simulation again, this time using the Firth correction. Note that we have to change our effect size to a length-one argument. We can use the value given in our earlier design. Remember that effect size = 2 * anticipated coefficient value:
+
+```{r}
+optdesign4 = gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = 270)
+
+eval_design_custom_mc(optdesign4, alpha = .2, nsim = 1000, fitfunction = fitfirth, pvalfunction = pvalfirth, rfunction = rfunctionfirth, effectsize = 2 * 0.405, calceffect = TRUE, parallel = TRUE)
+```
+
+We have no separation this time, so we will proceed to increase our replications to achieve an effect powers of 0.8. We guess that we will need between 14-19 replications:
+
+```{r}
+counter <-1
+designpower <-list()
+for(samplesize in seq(405, 540, by = 27)) {
+  optdesign4 <- gen_design(candidateset = factorial3, model = ~ (Mail_Type+Truck_Type+Weather+Mail_Type)^2, trials = samplesize)
+  designpower[[counter]] <- eval_design_custom_mc(optdesign4, alpha = .2, nsim = 1000, fitfunction = fitfirth, pvalfunction = pvalfirth, rfunction = rfunctionfirth, effectsize = 2 * 0.405, calceffect = TRUE, parallel = TRUE)
+  counter <- counter + 1
+}
+
+designpower[[length(designpower)]]
+```
+
+
+
+
+## Example: D-Optimal Design (Binary Response)
+
+### (UNDER CONSTRUCTION)
+
+
+
+
+## Ao Simulation and MTBCF
+
+Please see the companion code in Python for this example.
+
+
+## Power Curve Generation
+
+
+```{r}
+snr_min      = 0 
+snr_max      = 2.5 
+snr_interval = 0.1 
+
+for (i in seq(snr_min, snr_max, by = snr_interval)) {
+
+  Powertable  = eval_design(design = end_design, alpha = 0.2, effectsize = i, detailedoutput = TRUE, conservative = TRUE)
+
+  if (i == snr_min) {
+    result = data.frame(Parameter = rep(NA, times = nrow(Powertable)))
+    result[, "Parameter"] = Powertable$parameter
+  }
+  result[, paste("SNR", i, sep = "_")] = Powertable$power
+}
+  
+rows_to_keep = seq(2, which(result$Parameter == "(Intercept)")[2] - 1)
+  
+SNRtable = result[rows_to_keep, ] 
+SNRinteractions = SNRtable[grep(":", SNRtable$Parameter), ]
+SNReffects = SNRtable[grep(":", SNRtable$Parameter, invert = TRUE), ]
+ 
+  
+list_minmax <- list()
+list_minmax$MinEffect = SNReffects %>% slice_min(SNR_1) %>% 
+    slice_head(n = 1) %>% mutate(Parameter = "Min Main Effect")
+list_minmax$MaxEffect = SNReffects %>% slice_max(SNR_1) %>% 
+    slice_head(n = 1) %>% mutate(Parameter = "Max Main Effect")
+list_minmax$MinInteraction = SNRinteractions %>% slice_min(SNR_1) %>% 
+    slice_head(n = 1) %>% mutate(Parameter = "Min 2F Interaction")
+list_minmax$MaxInteraction = SNRinteractions %>% slice_max(SNR_1) %>% 
+    slice_head(n = 1) %>% mutate(Parameter = "Max 2F Interaction")
+  
+MinMax = bind_rows(list_minmax)
+rm(list_minmax)
+
+PowerCurve <-
+  MinMax %>%
+  pivot_longer(
+    cols = -Parameter
+  , names_to = "SNR"
+  , values_to = "Power"
+  ) %>%
+  mutate(
+    SNR = SNR %>% str_split(pattern = fixed("SNR_"), n = 2, simplify = TRUE) %>% 
+            as_tibble() %>% pull(2) %>% as.numeric()
+  )
+  
+  
+PowerCurvePlot = ggplot(PowerCurve, aes(x = SNR, y = Power, colour = Parameter, linetype = Parameter)) +
+                   theme(text = element_text(size = 20))+
+                   theme(plot.background = element_rect(color = "black", size = 1))+
+                   geom_line(size = 1.5) +
+                   labs(x = "Signal-to-Noise Ratio (SNR)") + 
+                   labs(y = "Power") + 
+                   labs(title = "Power Curves") +
+                   labs(subtitle = "GPS System COI 1 - Op 1") +
+                   scale_colour_brewer(palette = "Paired") + 
+                   theme(legend.position = "right")
+  
+  
+list(MinMax, PowerCurvePlot)
+```
+
+
+
+## References
+
+The skpr package was created by Dr. Tyler Morgan-Wall and Dr. George Khoury from the Institute for Defense Analysis.
+
+AFOTEC Test Design Guide - AFOTEC A-2/9
+
+Freeman, Laura, & Johnson, Thomas, & Simpson, James. (2014, November). Power Analysis Tutorial for Experimental
+Design Software. Institute for Defense Analysis. <https://apps.dtic.mil/sti/pdfs/ADA619843.pdf> 
+
+Morgan-Wall, Tyler., & Khoury, George. (2021, August 18). Optimal Design Generation and Power Evaluation in R: The skpr Package. Journal of Statistical Software. <https://www.jstatsoft.org/article/view/v099i01>
+
+Ortiz, Francisco. (2018, July 19). Categorical Data in a Designed
+Experiment Part 2: Sizing with a Binary Response. STAT Center of Excellence, Air Force Institute of Technology. <https://www.afit.edu/STAT/passthru.cfm?statfile=21>
+
+Ortiz, Francisco. (2018, July 19). Sample Size Calculator for Designed Experiments That Use Binary Responses. STAT Center of Excellence, Air Force Institute of Technology. <https://www.afit.edu/STAT/passthru.cfm?statfile=75>
+
+Ramert, Aaron (2019, August 31). Understanding the Signal to Noise Ratio in Design of Experiments. STAT Center of Excellence, Air Force Institute of Technology. <https://www.afit.edu/STAT/passthru.cfm?statfile=109>
+
+
+
+[1]: https://www.jstatsoft.org/article/download/v099i01/1435  "Optimal Design Generation and Power Evaluation in R: The skpr Package"
+[2]: https://apps.dtic.mil/sti/pdfs/ADA619843.pdf  "Power Analysis Tutorial for Experimental Design Software"
+[3]: https://www.afit.edu/STAT/passthru.cfm?statfile=21  "Categorical Data in a Designed Experiment Part 2: Sizing with a Binary Response"
+[4]: https://www.afit.edu/STAT/passthru.cfm?statfile=109  "Understanding the Signal to Noise Ratio in Design of Experiments"
+[5]: https://www.afit.edu/STAT/passthru.cfm?statfile=75  "Sample Size Calculator for Designed Experiments That Use Binary Responses"
+
+
